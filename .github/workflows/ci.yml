@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  after:
+    name: after — hardened (typecheck + tests vs Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoices
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/invoices
+      DATABASE_URL: postgres://app_user:app_pw@localhost:5432/invoices
+      JWT_SECRET: ci-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install
+        working-directory: after
+        run: npm install
+      - name: typecheck
+        working-directory: after
+        run: npm run typecheck
+      - name: migrate (as superuser — creates app_user + RLS)
+        working-directory: after
+        run: npm run migrate
+      - name: test
+        working-directory: after
+        run: npm test
+
+  before:
+    name: before — MVP (typecheck only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install
+        working-directory: before
+        run: npm install
+      - name: typecheck
+        working-directory: before
+        run: npm run typecheck

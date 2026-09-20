@@ -39,13 +39,13 @@ alter table invoices force row level security;
 
 drop policy if exists clients_tenant_isolation on clients;
 create policy clients_tenant_isolation on clients
-  using      (org_id = current_setting('app.org_id', true)::uuid)
-  with check (org_id = current_setting('app.org_id', true)::uuid);
+  using      (org_id = nullif(current_setting('app.org_id', true), '')::uuid)
+  with check (org_id = nullif(current_setting('app.org_id', true), '')::uuid);
 
 drop policy if exists invoices_tenant_isolation on invoices;
 create policy invoices_tenant_isolation on invoices
-  using      (org_id = current_setting('app.org_id', true)::uuid)
-  with check (org_id = current_setting('app.org_id', true)::uuid);
+  using      (org_id = nullif(current_setting('app.org_id', true), '')::uuid)
+  with check (org_id = nullif(current_setting('app.org_id', true), '')::uuid);
 -- NOTE: current_setting(..., true) returns NULL when app.org_id is unset, so a
 -- request that forgets to set the tenant context matches no rows. Fails closed.
 
@@ -57,4 +57,14 @@ do $$ begin
 end $$;
 
 grant usage on schema public to app_user;
-grant select, insert, update, delete on all tables in schema public to app_user;
+revoke all on organizations, users from app_user;
+grant select, insert, update, delete on clients, invoices to app_user;
+
+-- Bind the referenced client to the invoice tenant, including existing schemas.
+create unique index if not exists clients_org_id_id on clients(org_id, id);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'invoices_tenant_client_fk' and conrelid = 'invoices'::regclass) then
+    alter table invoices add constraint invoices_tenant_client_fk
+      foreign key (org_id, client_id) references clients(org_id, id);
+  end if;
+end $$;

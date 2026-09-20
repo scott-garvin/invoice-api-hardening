@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { signToken } from '../src/auth';
@@ -102,4 +102,50 @@ describe('auth', () => {
     const r = await request(app).get('/invoices').set(bearer(tampered));
     expect(r.status).toBe(401);
   });
+});
+
+
+// These tests run against the restricted app role, not the migration superuser.
+import { pool, withTenant } from '../src/db';
+import jwt from 'jsonwebtoken';
+afterAll(() => pool.end());
+it('rejects a client belonging to another tenant', async () => {
+  const r = await createInvoice(tokens.adminA, FIXTURES.clientB, ['5.00']);
+  expect(r.status).toBe(400);
+});
+it('cross-tenant writes cannot alter or delete an invoice', async () => {
+  const r = await createInvoice(tokens.adminB, FIXTURES.clientB, ['5.00']);
+  expect((await request(app).patch(`/invoices/${r.body.id}`).set(bearer(tokens.adminA)).send({status:'paid'})).status).toBe(404);
+  expect((await request(app).delete(`/invoices/${r.body.id}`).set(bearer(tokens.adminA))).status).toBe(404);
+  expect((await request(app).get(`/invoices/${r.body.id}`).set(bearer(tokens.adminB))).body.status).toBe('draft');
+});
+it('PATCH rejects tenant mass assignment', async () => {
+  const r = await createInvoice(tokens.adminA, FIXTURES.clientA, ['5.00']);
+  expect((await request(app).patch(`/invoices/${r.body.id}`).set(bearer(tokens.adminA)).send({org_id:FIXTURES.orgB})).status).toBe(400);
+});
+it('viewer cannot create or edit', async () => {
+  expect((await createInvoice(tokens.viewerA, FIXTURES.clientA, ['5.00'])).status).toBe(403);
+  const r = await createInvoice(tokens.adminA, FIXTURES.clientA, ['5.00']);
+  expect((await request(app).patch(`/invoices/${r.body.id}`).set(bearer(tokens.viewerA)).send({status:'paid'})).status).toBe(403);
+});
+it('rejects an expired signed token', async () => {
+  const t = jwt.sign({userId:FIXTURES.adminA,orgId:FIXTURES.orgA,role:'admin'},process.env.JWT_SECRET!,{expiresIn:-1});
+  expect((await request(app).get('/invoices').set(bearer(t))).status).toBe(401);
+});
+it('RLS fails closed on the same connection after commit and rollback', async () => {
+  const c = await pool.connect();
+  try {
+    const role = await c.query('select rolsuper, rolbypassrls from pg_roles where rolname=current_user');
+    expect(role.rows[0]).toEqual({rolsuper:false,rolbypassrls:false});
+    for (const ending of ['commit','rollback']) {
+      await c.query('begin');
+      await c.query("select set_config('app.org_id',$1,true)",[FIXTURES.orgA]);
+      expect((await c.query('select * from clients')).rows).toHaveLength(1);
+      await c.query(ending);
+      expect((await c.query('select * from clients')).rows).toHaveLength(0);
+    }
+  } finally { c.release(); }
+});
+it('application role cannot read the unscoped user directory', async () => {
+  await expect(withTenant(FIXTURES.orgA,c=>c.query('select * from users'))).rejects.toMatchObject({code:'42501'});
 });

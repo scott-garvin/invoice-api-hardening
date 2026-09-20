@@ -7,7 +7,7 @@ services:
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5450:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s
@@ -26,7 +26,7 @@ services:
       PORT: "3000"
     command: sh -c "npm run migrate && npm run seed && npm start"
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3010:3000"
 
   before:
     build: ./before
@@ -38,4 +38,4 @@ services:
       PORT: "3001"
     command: sh -c "npm run migrate && npm run seed && npm start"
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3011:3001"
